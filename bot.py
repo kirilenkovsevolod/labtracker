@@ -6,22 +6,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import ReplyKeyboardMarkup
 from telegram.ext import MessageHandler, filters
 
-
 TOKEN = "8653168095:AAEsEtIQdDOZHXaSquGjvvxkriRnYn2V0O0"
 
 API_URL = "http://127.0.0.1:8000"
 
 user_states = {}
 
-#добавление
-def check_auth(user_id):
-    response = requests.get(f"{API_URL}/me", params={
-        "telegram_id": user_id
-    })
 
-    data = response.json()
-    return data.get("authorized", False)
-#конец добавления
 async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -31,15 +22,18 @@ async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("lab_"):
         lab_id = data.split("_")[1]
 
+        # получаем название лабы с сервера
+        lab_info = requests.get(f"{API_URL}/lab/{lab_id}").json()
+        lab_title = lab_info.get("title", f"Лабораторная {lab_id}")
+
         keyboard = [
             [InlineKeyboardButton("Сдать ✅", callback_data=f"submit_{lab_id}")],
             [InlineKeyboardButton("⬅️ Назад", callback_data="back_to_labs")]
         ]
-
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await query.edit_message_text(
-            f"Лабораторная {lab_id}\n\nОписание лабораторной...",
+            lab_title,
             reply_markup=reply_markup
         )
 
@@ -52,31 +46,20 @@ async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "lab_id": lab_id
         })
 
-        await query.edit_message_text(f"Лабораторная {lab_id} сдана ✅")
+        await query.edit_message_text(f"Лабораторная сдана ✅")
 
     elif data == "back_to_labs":
-        user_id = query.from_user.id
-        #правил для проверки
-        response = requests.get(f"{API_URL}/labs", params={
-            "telegram_id": user_id
-        })
+        login = context.user_data.get("saved_login", "")
 
-        print("STATUS:", response.status_code)
-        print("TEXT:", response.text)
-
+        response = requests.get(f"{API_URL}/labs", params={"login": login})
         labs = response.json()
-        #конец правки
-        statuses = requests.get(f"{API_URL}/status", params={
-            "student_id": user_id
-        }).json()
 
+        statuses = requests.get(f"{API_URL}/status", params={"login": login}).json()
         status_map = {s["lab_id"]: s["status"] for s in statuses}
 
         keyboard = []
-
         for lab in labs:
             status = status_map.get(lab["id"], "none")
-
             if status == "done":
                 icon = "✅"
             elif status == "pending":
@@ -92,39 +75,18 @@ async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await query.edit_message_text(
-            "Вот список лабораторных:",
-            reply_markup=reply_markup
-        )
+        await query.edit_message_text("Вот список лабораторных:", reply_markup=reply_markup)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    # 👇 если уже авторизован
-    if check_auth(user_id):
-        keyboard = [
-            ["📚 Лабораторные"],
-            ["ℹ️ Помощь"]
-        ]
-
-        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
-
-        await update.message.reply_text(
-            "Вы уже вошли в систему 👌",
-            reply_markup=reply_markup
-        )
-        return
-
-    # 👇 если нет
     await update.message.reply_text("Введите логин:")
+    user_id = update.message.from_user.id
     user_states[user_id] = "login"
 
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Поддержка: юзернейм поддержки"
-    )
+    await update.message.reply_text("Поддержка: юзернейм поддержки")
+
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -147,21 +109,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "telegram_id": user_id
         })
 
-
         if response.status_code == 200:
             data = response.json()
+            context.user_data["saved_login"] = login  # сохраняем логин
+
             keyboard = [
                 ["📚 Лабораторные"],
                 ["ℹ️ Помощь"]
             ]
-
             reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
             await update.message.reply_text(
                 f"Добро пожаловать, {data['name']} из группы {data['group_name']}",
                 reply_markup=reply_markup
             )
-
             user_states[user_id] = None
         else:
             await update.message.reply_text("❌ Неверный логин или пароль")
@@ -169,41 +130,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id] = "login"
         return
 
-    # добавление
-    # ❗ разрешаем ввод логина и пароля
-    # if not check_auth(user_id) and state not in ["login", "password"]:
-    #     await update.message.reply_text(
-    #         "Вы не авторизованы. \nИспользуйте /start или /help"
-    #     )
-    #     return
-    # конец
-
-
     if "Лабораторные" in text:
-        user_id = update.message.from_user.id
+        login = context.user_data.get("saved_login", "")
 
-        #правка для отладки
-        response = requests.get(f"{API_URL}/labs", params={
-            "telegram_id": user_id
-        })
-
-        print("STATUS:", response.status_code)
-        print("TEXT:", response.text)
-
+        response = requests.get(f"{API_URL}/labs", params={"login": login})
         labs = response.json()
-        #конец правки
 
-        statuses = requests.get(f"{API_URL}/status", params={
-            "student_id": user_id
-        }).json()
-
+        statuses = requests.get(f"{API_URL}/status", params={"login": login}).json()
         status_map = {s["lab_id"]: s["status"] for s in statuses}
 
         keyboard = []
-
         for lab in labs:
             status = status_map.get(lab["id"], "none")
-
             if status == "done":
                 icon = "✅"
             elif status == "pending":
@@ -219,27 +157,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
 
         reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(
-            "Вот список лабораторных:",
-            reply_markup=reply_markup
-        )
-
+        await update.message.reply_text("Вот список лабораторных:", reply_markup=reply_markup)
 
     elif "Помощь" in text:
         await update.message.reply_text("Используй кнопки для навигации")
 
 
 async def labs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-
-    response = requests.get(f"{API_URL}/labs", params={
-        "telegram_id": user_id
-    })
+    login = context.user_data.get("saved_login", "")
+    response = requests.get(f"{API_URL}/labs", params={"login": login})
     labs = response.json()
-
     text = "\n".join([l["title"] for l in labs])
     await update.message.reply_text(text if text else "Нет лабораторных")
+
 
 app = ApplicationBuilder().token(TOKEN).build()
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
@@ -249,4 +179,3 @@ app.add_handler(CommandHandler("help", help_command))
 app.add_handler(CommandHandler("labs", labs))
 
 app.run_polling()
-
