@@ -3,10 +3,10 @@ from main import SessionLocal, Student
 db = SessionLocal()
 
 student = Student(
-    name="Игорь",
-    login="igor",
+    name="Сева",
+    login="seva",
     password="123",
-    group_name="ИВТ-25-1Б"
+    group_name="РИС-25-3Б"
 )
 
 db.add(student)
