@@ -4,3 +4,4 @@ __pycache__/
 .idea/
 test.db
 .idea/
+.env

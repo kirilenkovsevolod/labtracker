@@ -5,12 +5,16 @@ from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 from telegram import ReplyKeyboardMarkup
 from telegram.ext import MessageHandler, filters
+from dotenv import load_dotenv
+import os
 
-TOKEN = "8653168095:AAEsEtIQdDOZHXaSquGjvvxkriRnYn2V0O0"
+load_dotenv()
+TOKEN = os.getenv("BOT_TOKEN")
 
 API_URL = "http://127.0.0.1:8000"
 
 user_states = {}
+pending_answers = {}
 
 
 async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -41,12 +45,75 @@ async def handle_lab(update: Update, context: ContextTypes.DEFAULT_TYPE):
         lab_id = data.split("_")[1]
         user_id = query.from_user.id
 
-        requests.post(f"{API_URL}/submit", params={
-            "student_id": user_id,
-            "lab_id": lab_id
-        })
+        response = requests.get(f"{API_URL}/question/{lab_id}")
+        data_json = response.json()
+        if "question" not in data_json:
+            keyboard = [
+                [InlineKeyboardButton(
+                    "⬅️ Назад",
+                    callback_data=f"lab_{lab_id}"
+                )]
+            ]
 
-        await query.edit_message_text(f"Лабораторная сдана ✅")
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(
+                "Для этой лабораторной нет вопросов",
+                reply_markup=reply_markup
+            )
+
+            return
+
+        pending_answers[user_id] = {
+            "lab_id": lab_id,
+            "question_id": data_json["id"]
+        }
+
+        keyboard = [
+            [InlineKeyboardButton(
+                "⬅️ Назад",
+                callback_data=f"lab_{lab_id}"
+            )]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            f"❓ Вопрос:\n\n{data_json['question']}\n\nВведите ответ сообщением",
+            reply_markup=reply_markup
+        )
+
+    elif data.startswith("retry_"):
+
+        user_id = query.from_user.id
+
+        if user_id not in pending_answers:
+            await query.edit_message_text(
+                "Вопрос больше не активен"
+            )
+            return
+
+        question_id = pending_answers[user_id]["question_id"]
+
+        response = requests.get(
+            f"{API_URL}/question_by_id/{question_id}"
+        )
+
+        question_data = response.json()
+
+        keyboard = [
+            [InlineKeyboardButton(
+                "⬅️ Назад",
+                callback_data="back_to_labs"
+            )]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await query.edit_message_text(
+            f"❓ Вопрос:\n\n{question_data['question']}\n\nВведите ответ сообщением",
+            reply_markup=reply_markup
+        )
 
     elif data == "back_to_labs":
         login = context.user_data.get("saved_login", "")
@@ -91,7 +158,77 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     text = update.message.text
+
+    if user_id in pending_answers:
+        answer_data = pending_answers[user_id]
+
+        question_id = answer_data["question_id"]
+
+        response = requests.post(
+            f"{API_URL}/check_answer",
+            params={
+                "question_id": question_id,
+                "answer": text
+            },
+            timeout=60
+        )
+
+        result = response.json()
+
+        keyboard = [
+            [InlineKeyboardButton(
+                "⬅️ К списку лабораторных",
+                callback_data="back_to_labs"
+            )]
+        ]
+
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        if result["correct"]:
+
+            lab_id = answer_data["lab_id"]
+
+            requests.post(
+                f"{API_URL}/submit",
+                params={
+                    "student_id": user_id,
+                    "lab_id": lab_id
+                },
+                timeout=60
+            )
+
+            await update.message.reply_text(
+                "✅ Ответ правильный\nЛабораторная сдана",
+                reply_markup=reply_markup
+            )
+
+            del pending_answers[user_id]
+
+        else:
+
+            keyboard = [
+                [InlineKeyboardButton(
+                    "🔄 Попробовать снова",
+                    callback_data=f"retry_{question_id}"
+                )],
+                [InlineKeyboardButton(
+                    "⬅️ К списку лабораторных",
+                    callback_data="back_to_labs"
+                )]
+            ]
+
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await update.message.reply_text(
+                "❌ Неправильный ответ",
+                reply_markup=reply_markup
+            )
+
+        return
+
     state = user_states.get(user_id)
+
+
 
     if state == "login":
         context.user_data["login"] = text
