@@ -16,6 +16,11 @@
 #include <QStatusBar>
 #include <QList>
 #include <QMessageBox>
+#include <QFileDialog>
+#include <QHttpMultiPart>
+#include <QHttpPart>
+#include <QFile>
+#include <QMimeDatabase>
 
 class MainWindow : public QMainWindow
 {
@@ -31,6 +36,7 @@ private slots:
     void deleteSelectedLab();
     void deleteSelectedStudent();
     void deleteSelectedSubmission();
+    void uploadFileForSelectedLab();
 
     void onStudentsLoaded(QNetworkReply *reply);
     void onLabsLoaded(QNetworkReply *reply);
@@ -56,6 +62,7 @@ private:
     QTableWidget *m_labsTable;
     QPushButton  *m_addLabBtn;
     QPushButton  *m_deleteLabBtn;
+    QPushButton  *m_uploadFileBtn;
     QList<int>    m_labIds;
 
     // Сдачи

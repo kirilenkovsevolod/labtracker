@@ -13,8 +13,6 @@ MainWindow::MainWindow(QWidget *parent)
     refreshAll();
 }
 
-// ─── UI ──────────────────────────────────────────────────────────────────────
-
 void MainWindow::setupUi()
 {
     setWindowTitle("LabTracker — Панель преподавателя");
@@ -88,25 +86,33 @@ void MainWindow::setupLabsTab()
     QHBoxLayout *btnRow = new QHBoxLayout();
     m_addLabBtn = new QPushButton("+ Добавить лабораторную", tab);
     m_addLabBtn->setFixedWidth(220);
-    m_deleteLabBtn = new QPushButton("🗑 Удалить выбранную", tab);
-    m_deleteLabBtn->setFixedWidth(200);
+    m_deleteLabBtn = new QPushButton("🗑 Удалить", tab);
+    m_deleteLabBtn->setFixedWidth(120);
     m_deleteLabBtn->setEnabled(false);
+    m_uploadFileBtn = new QPushButton("📎 Прикрепить файл", tab);
+    m_uploadFileBtn->setFixedWidth(180);
+    m_uploadFileBtn->setEnabled(false);
+
     btnRow->addWidget(m_addLabBtn);
     btnRow->addWidget(m_deleteLabBtn);
+    btnRow->addWidget(m_uploadFileBtn);
     btnRow->addStretch();
 
     connect(m_addLabBtn,    &QPushButton::clicked, this, &MainWindow::openAddLabDialog);
     connect(m_deleteLabBtn, &QPushButton::clicked, this, &MainWindow::deleteSelectedLab);
+    connect(m_uploadFileBtn,&QPushButton::clicked, this, &MainWindow::uploadFileForSelectedLab);
 
-    m_labsTable = new QTableWidget(0, 2, tab);
-    m_labsTable->setHorizontalHeaderLabels({"Название", "Группа"});
+    m_labsTable = new QTableWidget(0, 3, tab);
+    m_labsTable->setHorizontalHeaderLabels({"Название", "Группа", "Файл"});
     m_labsTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_labsTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_labsTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_labsTable->verticalHeader()->setVisible(false);
 
     connect(m_labsTable, &QTableWidget::itemSelectionChanged, this, [this]() {
-        m_deleteLabBtn->setEnabled(m_labsTable->currentRow() >= 0);
+        bool selected = m_labsTable->currentRow() >= 0;
+        m_deleteLabBtn->setEnabled(selected);
+        m_uploadFileBtn->setEnabled(selected);
     });
 
     layout->addLayout(btnRow);
@@ -167,34 +173,28 @@ void MainWindow::refreshAll()
     }
 }
 
-// Универсальный метод DELETE с колбэком
-void MainWindow::sendDelete(const QString& url, std::function<void()> onSuccess)
+void MainWindow::sendDelete(const QString &url, std::function<void()> onSuccess)
 {
     QUrl qurl(url);
     QNetworkRequest req(qurl);
-    QNetworkReply* reply = m_network->deleteResource(req);
+    QNetworkReply *reply = m_network->deleteResource(req);
     connect(reply, &QNetworkReply::finished, this, [this, reply, onSuccess]() {
         reply->deleteLater();
         if (reply->error() != QNetworkReply::NoError) {
-            statusBar()->showMessage("Ошибка удаления: " + reply->errorString());
             QMessageBox::critical(this, "Ошибка", "Не удалось удалить:\n" + reply->errorString());
             return;
         }
         onSuccess();
-        });
+    });
 }
 
 void MainWindow::onStudentsLoaded(QNetworkReply *reply)
 {
     reply->deleteLater();
-    if (reply->error() != QNetworkReply::NoError) {
-        statusBar()->showMessage("Ошибка загрузки студентов");
-        return;
-    }
+    if (reply->error() != QNetworkReply::NoError) { statusBar()->showMessage("Ошибка загрузки студентов"); return; }
     QJsonArray arr = QJsonDocument::fromJson(reply->readAll()).array();
     m_studentsTable->setRowCount(0);
     m_studentIds.clear();
-
     for (const QJsonValue &v : arr) {
         QJsonObject obj = v.toObject();
         int row = m_studentsTable->rowCount();
@@ -202,8 +202,7 @@ void MainWindow::onStudentsLoaded(QNetworkReply *reply)
         m_studentsTable->setItem(row, 0, new QTableWidgetItem(obj["name"].toString()));
         m_studentsTable->setItem(row, 1, new QTableWidgetItem(obj["group_name"].toString()));
         m_studentsTable->setItem(row, 2, new QTableWidgetItem(
-            QString::number(obj["telegram_id"].toVariant().toLongLong())
-        ));
+            QString::number(obj["telegram_id"].toVariant().toLongLong())));
         m_studentIds.append(obj["id"].toInt());
     }
     m_deleteStudentBtn->setEnabled(false);
@@ -213,51 +212,98 @@ void MainWindow::onStudentsLoaded(QNetworkReply *reply)
 void MainWindow::onLabsLoaded(QNetworkReply *reply)
 {
     reply->deleteLater();
-    if (reply->error() != QNetworkReply::NoError) {
-        statusBar()->showMessage("Ошибка загрузки лабораторных");
-        return;
-    }
+    if (reply->error() != QNetworkReply::NoError) { statusBar()->showMessage("Ошибка загрузки лаб"); return; }
     QJsonArray arr = QJsonDocument::fromJson(reply->readAll()).array();
     m_labsTable->setRowCount(0);
     m_labIds.clear();
-
     for (const QJsonValue &v : arr) {
         QJsonObject obj = v.toObject();
         int row = m_labsTable->rowCount();
         m_labsTable->insertRow(row);
         m_labsTable->setItem(row, 0, new QTableWidgetItem(obj["title"].toString()));
         m_labsTable->setItem(row, 1, new QTableWidgetItem(obj["group_name"].toString()));
+        QString fp = obj["file_path"].toString();
+        m_labsTable->setItem(row, 2, new QTableWidgetItem(fp.isEmpty() ? "—" : "✅ Есть"));
         m_labIds.append(obj["id"].toInt());
     }
     m_deleteLabBtn->setEnabled(false);
+    m_uploadFileBtn->setEnabled(false);
 }
 
 void MainWindow::onSubmissionsLoaded(QNetworkReply *reply)
 {
     reply->deleteLater();
-    if (reply->error() != QNetworkReply::NoError) {
-        statusBar()->showMessage("Ошибка загрузки сдач");
-        return;
-    }
+    if (reply->error() != QNetworkReply::NoError) { statusBar()->showMessage("Ошибка загрузки сдач"); return; }
     QJsonArray arr = QJsonDocument::fromJson(reply->readAll()).array();
     m_submissionsTable->setRowCount(0);
     m_submissionIds.clear();
-
     for (const QJsonValue &v : arr) {
         QJsonObject obj = v.toObject();
         int row = m_submissionsTable->rowCount();
         m_submissionsTable->insertRow(row);
         m_submissionsTable->setItem(row, 0, new QTableWidgetItem(obj["student_name"].toString()));
         m_submissionsTable->setItem(row, 1, new QTableWidgetItem(obj["lab_title"].toString()));
-
         QString status = obj["status"].toString();
         QString icon = (status == "done") ? "✅ Сдано" : "⏳ На проверке";
-        QTableWidgetItem *statusItem = new QTableWidgetItem(icon);
-        statusItem->setForeground((status == "done") ? Qt::darkGreen : Qt::darkYellow);
-        m_submissionsTable->setItem(row, 2, statusItem);
+        QTableWidgetItem *si = new QTableWidgetItem(icon);
+        si->setForeground((status == "done") ? Qt::darkGreen : Qt::darkYellow);
+        m_submissionsTable->setItem(row, 2, si);
         m_submissionIds.append(obj["id"].toInt());
     }
     m_deleteSubmissionBtn->setEnabled(false);
+}
+
+// ─── Загрузка файла ───────────────────────────────────────────────────────────
+
+void MainWindow::uploadFileForSelectedLab()
+{
+    int row = m_labsTable->currentRow();
+    if (row < 0 || row >= m_labIds.size()) return;
+
+    QString filePath = QFileDialog::getOpenFileName(
+        this, "Выберите файл лабораторной", "",
+        "Документы (*.pdf *.docx *.doc *.txt);;Все файлы (*)"
+    );
+    if (filePath.isEmpty()) return;
+
+    int labId = m_labIds[row];
+    QString labTitle = m_labsTable->item(row, 0)->text();
+
+    QFile *file = new QFile(filePath);
+    if (!file->open(QIODevice::ReadOnly)) {
+        QMessageBox::critical(this, "Ошибка", "Не удалось открыть файл");
+        delete file;
+        return;
+    }
+
+    QHttpMultiPart *multiPart = new QHttpMultiPart(QHttpMultiPart::FormDataType);
+
+    QHttpPart filePart;
+    QFileInfo fi(filePath);
+    filePart.setHeader(QNetworkRequest::ContentDispositionHeader,
+        QString("form-data; name=\"file\"; filename=\"%1\"").arg(fi.fileName()));
+    filePart.setHeader(QNetworkRequest::ContentTypeHeader, "application/octet-stream");
+    filePart.setBodyDevice(file);
+    file->setParent(multiPart);
+
+    multiPart->append(filePart);
+
+    QUrl qurl(API + QString("/lab/%1/upload").arg(labId));
+    QNetworkRequest req(qurl);
+    QNetworkReply *reply = m_network->post(req, multiPart);
+    multiPart->setParent(reply);
+
+    statusBar()->showMessage("Загрузка файла...");
+
+    connect(reply, &QNetworkReply::finished, this, [this, reply, labTitle]() {
+        reply->deleteLater();
+        if (reply->error() != QNetworkReply::NoError) {
+            QMessageBox::critical(this, "Ошибка", "Не удалось загрузить файл:\n" + reply->errorString());
+            return;
+        }
+        statusBar()->showMessage(QString("Файл для \"%1\" загружен").arg(labTitle));
+        refreshAll();
+    });
 }
 
 // ─── Удаление ────────────────────────────────────────────────────────────────
@@ -266,15 +312,11 @@ void MainWindow::deleteSelectedLab()
 {
     int row = m_labsTable->currentRow();
     if (row < 0 || row >= m_labIds.size()) return;
-
     QString title = m_labsTable->item(row, 0)->text();
-    if (QMessageBox::question(this, "Удалить лабораторную",
-            QString("Удалить \"%1\"?").arg(title),
+    if (QMessageBox::question(this, "Удалить", QString("Удалить \"%1\"?").arg(title),
             QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-
     sendDelete(API + QString("/lab/%1").arg(m_labIds[row]), [this]() {
-        statusBar()->showMessage("Лабораторная удалена");
-        refreshAll();
+        statusBar()->showMessage("Лабораторная удалена"); refreshAll();
     });
 }
 
@@ -282,15 +324,11 @@ void MainWindow::deleteSelectedStudent()
 {
     int row = m_studentsTable->currentRow();
     if (row < 0 || row >= m_studentIds.size()) return;
-
     QString name = m_studentsTable->item(row, 0)->text();
-    if (QMessageBox::question(this, "Удалить студента",
-            QString("Удалить студента \"%1\"?").arg(name),
+    if (QMessageBox::question(this, "Удалить", QString("Удалить \"%1\"?").arg(name),
             QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-
     sendDelete(API + QString("/student/%1").arg(m_studentIds[row]), [this]() {
-        statusBar()->showMessage("Студент удалён");
-        refreshAll();
+        statusBar()->showMessage("Студент удалён"); refreshAll();
     });
 }
 
@@ -298,16 +336,10 @@ void MainWindow::deleteSelectedSubmission()
 {
     int row = m_submissionsTable->currentRow();
     if (row < 0 || row >= m_submissionIds.size()) return;
-
-    QString student = m_submissionsTable->item(row, 0)->text();
-    QString lab     = m_submissionsTable->item(row, 1)->text();
-    if (QMessageBox::question(this, "Удалить сдачу",
-            QString("Удалить сдачу \"%1 — %2\"?").arg(student, lab),
+    if (QMessageBox::question(this, "Удалить", "Удалить эту сдачу?",
             QMessageBox::Yes | QMessageBox::No) != QMessageBox::Yes) return;
-
     sendDelete(API + QString("/submission/%1").arg(m_submissionIds[row]), [this]() {
-        statusBar()->showMessage("Сдача удалена");
-        refreshAll();
+        statusBar()->showMessage("Сдача удалена"); refreshAll();
     });
 }
 
